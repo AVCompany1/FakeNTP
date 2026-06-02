@@ -54,22 +54,9 @@ def signal_handler(sig: int, frame: None) -> None:
     sys.exit(0)
 
 
-def system_to_ntp_time(timestamp: float) -> float:
-    """
-    Convert system time format to ntp time format
-    (Taken from https://github.com/cf-natali/ntplib/blob/08d0f7ef766715a52f472901de5e382c8f773855/ntplib.py#L49)
-
-    :param timestamp: Timestamp
-    :type timestamp: float
-    :return: Timestamp in ntp format
-    :rtype: float
-    """
-    ntp_time = timestamp + _NTP_DELTA
-    if ntp_time >= 2**32:
-        raise ValueError(
-            "Timestamp {} is beyond NTPv3 rollover".format(timestamp)
-        )
-    return ntp_time
+def system_to_ntp_time(timestamp):
+    """Converte un timestamp Unix direttamente in formato NTP senza blocchi."""
+    return float(timestamp + 2208988800)
 
 
 def _to_int(timestamp: int):
@@ -122,9 +109,14 @@ class ThreadedUDPRequestHandler(socketserver.BaseRequestHandler):
             return
 
         # Update the time if we're using a static time
-        if not self.args.static_time and not self.args.time_step:
-            self.args.time = datetime.datetime.now().timestamp()
-        now = system_to_ntp_time(self.args.time)
+        if not self.server.args.static_time and not self.server.args.time_step:
+            self.server.args.time = datetime.datetime.now().timestamp()
+        
+        # Forza l'uso del tempo configurato dall'utente recuperandolo dal server
+        if self.server.args.time:
+            now = system_to_ntp_time(self.server.args.time)
+        else:
+            now = system_to_ntp_time(datetime.datetime.now().timestamp())
 
         # Build the NTP response
         response = NTPv3()
@@ -135,31 +127,38 @@ class ThreadedUDPRequestHandler(socketserver.BaseRequestHandler):
         response.poll = 1
         response.precision = 0xFFFFFFE7
         response.root_delay = _to_int(32) << 16 | _to_frac(32, 16)
-        response.root_dispersion = _to_int(0.000030) << 16 | _to_frac(
-            0.000030, 16
-        )
-        response.reference_identifier = int.from_bytes(
-            b"NIST", byteorder="big"
-        )  # NIST Public Modem
-        response.reference_timestamp = _to_int(now - 30) << 32 | _to_frac(
-            now - 30, 32
-        )  # 30 seconds ago, just a lie to make it believable :)
-        response.originate_timestamp = request.transmit_timestamp
-        response.receive_timestamp = _to_int(now) << 32 | _to_frac(now, 32)
-        response.transmit_timestamp = _to_int(now) << 32 | _to_frac(now, 32)
+        response.root_dispersion = _to_int(0.000030) << 16 | _to_frac(0.000030, 16)
 
-        logging.debug(
-            "Responding with time: {}".format(
-                datetime.datetime.fromtimestamp(now - _NTP_DELTA)
-            )
-        )
+        # Se l'utente ha impostato un tempo personalizzato, forziamo TUTTI i timestamp in modo coerente
+        if self.server.args.time:
+            tempo_unix = self.server.args.time
+            
+            # Imposta l'identificativo di riferimento (finto server GPS locale)
+            response.reference_identifier = int.from_bytes(b"LOCL", byteorder='big')
+            
+            # 1. Ultima sincronizzazione su internet (Reference Timestamp)
+            response.reference_timestamp = _to_int(tempo_unix) << 32 | _to_frac(tempo_unix, 32)
+            
+            # Copia l'originate dal client per validità del protocollo
+            response.originate_timestamp = request.transmit_timestamp
+            
+            # 2. Data e ora di Ricezione (Receive Timestamp)
+            response.receive_timestamp = _to_int(tempo_unix) << 32 | _to_frac(tempo_unix, 32)
+            
+            # 3. Data e ora di Invio (Transmit Timestamp)
+            response.transmit_timestamp = _to_int(tempo_unix) << 32 | _to_frac(tempo_unix, 32)
+        else:
+            # Comportamento standard originale se non si specifica --time
+            response.reference_identifier = int.from_bytes(b"LOCL", byteorder='big')
+            response.reference_timestamp = _to_int(now) << 32 | _to_frac(now, 32)
+            response.originate_timestamp = request.transmit_timestamp
+            response.receive_timestamp = _to_int(now) << 32 | _to_frac(now, 32)
+            response.transmit_timestamp = _to_int(now) << 32 | _to_frac(now, 32)
+
         logging.debug("Request:\n{}".format(request))
         logging.debug("Response:\n{}".format(response))
-        sock.sendto(response.get_bytes(), self.client_address)
 
-        # If we have a timestep, then we need to increment the time by that much
-        if self.args.time_step:
-            self.args.time += self.args.time_step
+        sock.sendto(response.get_bytes(), self.client_address)
 
 
 def build_parser() -> argparse.ArgumentParser:
