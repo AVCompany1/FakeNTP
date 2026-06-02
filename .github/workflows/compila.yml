@@ -1,0 +1,27 @@
+name: Genera Esereguibile Windows
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - name: Preleva Codice
+      uses: actions/checkout@v4
+
+    - name: Configura Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Installa PyInstaller
+      run: pip install pyinstaller
+
+    - name: Compila in EXE
+      run: pyinstaller --onefile --console FakeNTP.py
+
+    - name: Carica file finale
+      uses: actions/upload-artifact@v4
+      with:
+        name: Programma-Portable
+        path: dist/FakeNTP.exe
