@@ -88,33 +88,14 @@ def _to_frac(timestamp: int, bits: int = 32):
 class ThreadedUDPRequestHandler(socketserver.BaseRequestHandler):
     def handle(self):
         data, sock = self.request
-        logging.info(
-            "Received NTP request from: {}:{}".format(*self.client_address)
-        )
-
-        # Parse the NTP request
         request = NTPv3.from_buffer_copy(data)
-
-        # Check if we're passing the request to an upstream NTP server
-        if self.args.passthru:
-            # If so, send the request to the upstream NTP server and return its response
-            logging.debug("Proxying request to upstream NTP server")
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect((self.args.ntp_server, 123))
-                s.send(data)
-                response = NTPv3.from_buffer_copy(s.recv(1024))
-            logging.debug("Request:\n{}".format(request))
-            logging.debug("Response:\n{}".format(response))
-            sock.sendto(response.get_bytes(), self.client_address)
-            return
-
         # Update the time if we're using a static time
-        if not self.server.args.static_time and not self.server.args.time_step:
-            self.server.args.time = datetime.datetime.now().timestamp()
+        if not self.__class__.args.static_time and not self.__class__.args.time_step:
+            self.__class__.args.time = datetime.datetime.now().timestamp()
         
-        # Forza l'uso del tempo configurato dall'utente recuperandolo dal server
-        if self.server.args.time:
-            now = system_to_ntp_time(self.server.args.time)
+        # Forza l'uso del tempo configurato dall'utente recuperandolo dalla classe
+        if self.__class__.args.time:
+            now = system_to_ntp_time(self.__class__.args.time)
         else:
             now = system_to_ntp_time(datetime.datetime.now().timestamp())
 
@@ -130,8 +111,8 @@ class ThreadedUDPRequestHandler(socketserver.BaseRequestHandler):
         response.root_dispersion = _to_int(0.000030) << 16 | _to_frac(0.000030, 16)
 
         # Se l'utente ha impostato un tempo personalizzato, forziamo TUTTI i timestamp in modo coerente
-        if self.server.args.time:
-            tempo_unix = self.server.args.time
+        if self.__class__.args.time:
+            tempo_unix = self.__class__.args.time
             
             # Imposta l'identificativo di riferimento (finto server GPS locale)
             response.reference_identifier = int.from_bytes(b"LOCL", byteorder='big')
